@@ -68,10 +68,18 @@ bool sd_available = false;
 M5Canvas graphCanvas(&M5.Display);
 
 void loadSettings() {
-    if (!sd_available) return;
+    if (!sd_available) {
+        Serial.println("loadSettings: SD not available");
+        return;
+    }
+    // SD_MMC automatically prepends the mount point
     File f = SD_MMC.open("/settings.txt", FILE_READ);
-    if (!f) return;
+    if (!f) {
+        Serial.println("loadSettings: Failed to open /settings.txt");
+        return;
+    }
 
+    Serial.println("loadSettings: Start reading...");
     while (f.available()) {
         String line = f.readStringUntil('\n');
         line.trim();
@@ -95,22 +103,38 @@ void loadSettings() {
         }
     }
     f.close();
+    Serial.println("loadSettings: Success");
 }
 
 void saveSettings() {
+    Serial.println("saveSettings: Called");
     if (!sd_available) {
-        // Attempt to re-initialize if not available (hot-plug support)
+        Serial.println("saveSettings: Attempting SD re-init...");
         if (SD_MMC.begin("/sdcard", false)) {
             if (SD_MMC.cardType() != CARD_NONE) {
                 sd_available = true;
+                Serial.println("saveSettings: SD re-init SUCCESS");
+            } else {
+                Serial.println("saveSettings: SD re-init FAILED (No Card)");
             }
+        } else {
+            Serial.println("saveSettings: SD re-init FAILED (begin)");
         }
     }
-    if (!sd_available) return;
+
+    if (!sd_available) {
+        Serial.println("saveSettings: SD still not available, aborting");
+        return;
+    }
     
+    // SD_MMC automatically prepends the mount point
     File f = SD_MMC.open("/settings.txt", FILE_WRITE);
-    if (!f) return;
+    if (!f) {
+        Serial.println("saveSettings: Failed to open /settings.txt for writing");
+        return;
+    }
     
+    Serial.print("saveSettings: Writing to file...");
     f.printf("led_on=%d\n", led_on ? 1 : 0);
     f.printf("led_br=%d\n", led_br);
     f.printf("led_r=%d\n", led_r);
@@ -124,6 +148,7 @@ void saveSettings() {
     f.printf("show_g=%d\n", show_g ? 1 : 0);
     f.printf("show_b=%d\n", show_b ? 1 : 0);
     f.close();
+    Serial.println(" DONE");
 }
 
 void sendCommand() {
@@ -264,13 +289,21 @@ void setup() {
     Serial.begin(115200); 
 
     // SD MMC Init for Tab5 (P4)
+    Serial.print("Initializing SD MMC...");
     if (SD_MMC.setPins(43, 44, 39, 40, 41, 42)) {
         if (SD_MMC.begin("/sdcard", false)) {
             if (SD_MMC.cardType() != CARD_NONE) {
                 sd_available = true;
+                Serial.println(" SUCCESS");
                 loadSettings();
+            } else {
+                Serial.println(" FAILED (No Card)");
             }
+        } else {
+            Serial.println(" FAILED (begin)");
         }
+    } else {
+        Serial.println(" FAILED (setPins)");
     }
 
     // Enable USB Host power for Tab5
@@ -390,8 +423,10 @@ void loop() {
 
     // --- Touch UI ---
     static bool was_touched = false;
+    static bool ui_changed_this_touch = false;
     bool is_touched = (M5.Touch.getCount() > 0);
     bool just_pressed = (is_touched && !was_touched);
+    bool just_released = (!is_touched && was_touched);
     was_touched = is_touched;
 
     if (is_touched) {
@@ -447,12 +482,22 @@ void loop() {
         checkSlider(900, 620, 340, 70, thr_manual_b, true);
 
         if (ui_changed) {
+            ui_changed_this_touch = true;
             M5.Display.startWrite();
             drawHeader();
             drawGraph();
             drawAllUI();
             M5.Display.endWrite();
             sendCommand();
+        }
+    } else {
+        if (just_released && ui_changed_this_touch) {
+            saveSettings();
+            save_anim_time = millis();
+            M5.Display.startWrite();
+            drawHeader();
+            M5.Display.endWrite();
+            ui_changed_this_touch = false;
         }
     }
 
